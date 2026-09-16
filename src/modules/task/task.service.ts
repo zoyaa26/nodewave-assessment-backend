@@ -7,11 +7,15 @@ import {
   updateTaskAssigneeWithLock,
   createTaskDependency,
   hasDependencyPath,
+  softDeleteTask,
 } from "./task.repository";
 
 type Role = "PM" | "INTERNAL" | "CLIENT";
 
-type Department = "UI_UX" | "FRONTEND" | "BACKEND";
+type Department =
+  | "UI_UX"
+  | "FRONTEND"
+  | "BACKEND";
 
 type AuthUser = {
   userId: string;
@@ -19,32 +23,54 @@ type AuthUser = {
   department?: Department | null;
 };
 
-// =====================================================
-// GET TASK BY ID
-// =====================================================
+type TaskStatus =
+  | "TODO"
+  | "IN_PROGRESS"
+  | "DONE"
+  | "BLOCKED";
 
+/**
+ * =====================================================
+ * GET SINGLE TASK
+ * =====================================================
+ */
 export async function getTaskById(
   taskId: string,
   user: AuthUser,
 ) {
-  const task = await findTaskById(taskId);
+  if (!taskId) {
+    throw new Error("Task ID is required");
+  }
+
+  const task =
+    user.role === "CLIENT"
+      ? await findTaskById(
+          taskId,
+          user.userId,
+        )
+      : await findTaskById(taskId);
 
   if (!task) {
     throw new Error("Task not found");
   }
 
-  // PM boleh melihat semua task
+  // PM dapat melihat semua task
   if (user.role === "PM") {
     return task;
   }
 
-  // Client hanya boleh melihat task yang:
-  // 1. clientVisible = true
-  // 2. berasal dari project miliknya
+  // CLIENT:
+  // repository sudah memastikan task
+  // merupakan client-visible dan milik client
   if (user.role === "CLIENT") {
+    return task;
+  }
+
+  // INTERNAL:
+  // hanya task yang ditugaskan kepadanya
+  if (user.role === "INTERNAL") {
     if (
-      !task.clientVisible ||
-      task.project.clientId !== user.userId
+      task.assigneeId !== user.userId
     ) {
       throw new Error("Forbidden");
     }
@@ -52,56 +78,89 @@ export async function getTaskById(
     return task;
   }
 
-  // Internal hanya boleh melihat task miliknya
-  if (user.role === "INTERNAL") {
-    if (task.assigneeId !== user.userId) {
-      throw new Error("Forbidden");
-    }
-
-    return task;
-  }
-
   throw new Error("Forbidden");
 }
 
-// =====================================================
-// GET TASKS BY PROJECT
-// =====================================================
-
+/**
+ * =====================================================
+ * GET TASKS BY PROJECT
+ * =====================================================
+ */
 export async function getTasksByProject(
   projectId: string,
   user: AuthUser,
+  params: Record<
+    string,
+    string | string[] | undefined
+  > = {},
 ) {
-  // PM boleh melihat semua task
-  if (user.role === "PM") {
-    return findTasksByProjectId(projectId);
-  }
-
-  // Internal hanya melihat task yang ditugaskan kepadanya
-  if (user.role === "INTERNAL") {
-    const tasks = await findTasksByProjectId(projectId);
-
-    return tasks.filter(
-      (task) => task.assigneeId === user.userId,
+  if (!projectId) {
+    throw new Error(
+      "Project ID is required",
     );
   }
 
-  // Client hanya melihat task visible
-  // dari project miliknya
-  if (user.role === "CLIENT") {
+  /**
+   * PENTING:
+   * params dari controller diteruskan
+   * langsung ke repository supaya:
+   *
+   * filters
+   * searchFilters
+   * rangedFilters
+   * orderKey
+   * orderRule
+   * page
+   * rows
+   *
+   * tetap diproses oleh prisma-ezfilter.
+   */
+
+  // ===================================================
+  // PM
+  // ===================================================
+
+  if (user.role === "PM") {
     return findTasksByProjectId(
       projectId,
+      params,
+    );
+  }
+
+  // ===================================================
+  // INTERNAL
+  // ===================================================
+
+  if (user.role === "INTERNAL") {
+    return findTasksByProjectId(
+      projectId,
+      params,
+      undefined,
       user.userId,
     );
   }
 
+  // ===================================================
+  // CLIENT
+  // ===================================================
+
+  if (user.role === "CLIENT") {
+    return findTasksByProjectId(
+      projectId,
+      params,
+      user.userId,
+      undefined,
+    );
+  }
+
   throw new Error("Forbidden");
 }
 
-// =====================================================
-// CREATE TASK
-// =====================================================
-
+/**
+ * =====================================================
+ * CREATE TASK
+ * =====================================================
+ */
 export async function createNewTask(
   data: {
     projectId: string;
@@ -112,55 +171,104 @@ export async function createNewTask(
   },
   user: AuthUser,
 ) {
-  // Hanya PM yang boleh membuat task
+  // Hanya PM
   if (user.role !== "PM") {
     throw new Error("Forbidden");
   }
 
-  if (!data.title.trim()) {
-    throw new Error("Task title is required");
+  if (!data.projectId) {
+    throw new Error(
+      "Project ID is required",
+    );
   }
 
-  if (!data.description.trim()) {
-    throw new Error("Task description is required");
+  if (!data.title?.trim()) {
+    throw new Error(
+      "Task title is required",
+    );
   }
 
-  return createTask(data);
+  if (!data.description?.trim()) {
+    throw new Error(
+      "Task description is required",
+    );
+  }
+
+  return createTask({
+    projectId: data.projectId,
+    assigneeId:
+      data.assigneeId,
+    title: data.title.trim(),
+    description:
+      data.description.trim(),
+    clientVisible:
+      data.clientVisible ?? false,
+  });
 }
 
-// =====================================================
-// UPDATE TASK STATUS
-// =====================================================
-
+/**
+ * =====================================================
+ * UPDATE TASK STATUS
+ * =====================================================
+ */
 export async function updateTaskStatus(
   taskId: string,
-  newStatus:
-    | "TODO"
-    | "IN_PROGRESS"
-    | "DONE"
-    | "BLOCKED",
+  newStatus: TaskStatus,
   currentVersion: number,
   user: AuthUser,
 ) {
-  const task = await findTaskById(taskId);
-
-  if (!task) {
-    throw new Error("Task not found");
+  if (!taskId) {
+    throw new Error(
+      "Task ID is required",
+    );
   }
 
-  // Client tidak boleh mengubah task
+  if (
+    ![
+      "TODO",
+      "IN_PROGRESS",
+      "DONE",
+      "BLOCKED",
+    ].includes(newStatus)
+  ) {
+    throw new Error(
+      "Invalid task status",
+    );
+  }
+
+  if (
+    typeof currentVersion !== "number" ||
+    !Number.isInteger(currentVersion) ||
+    currentVersion < 1
+  ) {
+    throw new Error(
+      "Invalid task version",
+    );
+  }
+
+  const task =
+    await findTaskById(taskId);
+
+  if (!task) {
+    throw new Error(
+      "Task not found",
+    );
+  }
+
+  // CLIENT tidak boleh mengubah task
   if (user.role === "CLIENT") {
     throw new Error("Forbidden");
   }
 
-  // Internal hanya boleh mengubah task miliknya
-  if (user.role === "INTERNAL") {
-    if (task.assigneeId !== user.userId) {
-      throw new Error("Forbidden");
-    }
+  // INTERNAL hanya boleh mengubah task sendiri
+  if (
+    user.role === "INTERNAL" &&
+    task.assigneeId !== user.userId
+  ) {
+    throw new Error("Forbidden");
   }
 
-  // PM tidak boleh mengubah task menjadi DONE
+  // PM tidak boleh mengubah status menjadi DONE
   if (
     user.role === "PM" &&
     newStatus === "DONE"
@@ -170,7 +278,11 @@ export async function updateTaskStatus(
     );
   }
 
-  // Frontend harus menunggu semua dependency selesai
+  /**
+   * FRONTEND:
+   * Tidak boleh mulai bekerja jika dependency
+   * belum semuanya DONE.
+   */
   if (
     user.role === "INTERNAL" &&
     user.department === "FRONTEND" &&
@@ -179,16 +291,20 @@ export async function updateTaskStatus(
     const unfinishedDependencies =
       task.dependencies.filter(
         (dependency) =>
-          dependency.dependsOnTask.status !== "DONE",
+          dependency.dependsOnTask.status !==
+          "DONE",
       );
 
-    if (unfinishedDependencies.length > 0) {
+    if (
+      unfinishedDependencies.length > 0
+    ) {
       throw new Error(
         "Task dependencies must be completed before starting this task",
       );
     }
   }
 
+  // Optimistic locking
   const result =
     await updateTaskStatusWithLock(
       taskId,
@@ -206,42 +322,57 @@ export async function updateTaskStatus(
   return result.task;
 }
 
-// =====================================================
-// UPDATE TASK DESCRIPTION
-// =====================================================
-
+/**
+ * =====================================================
+ * UPDATE DESCRIPTION
+ * =====================================================
+ */
 export async function updateTaskDescription(
   taskId: string,
   newDescription: string,
   currentVersion: number,
   user: AuthUser,
 ) {
-  const task = await findTaskById(taskId);
-
-  if (!task) {
-    throw new Error("Task not found");
+  if (!taskId) {
+    throw new Error(
+      "Task ID is required",
+    );
   }
 
-  // CLIENT tidak boleh mengubah task
-  if (user.role === "CLIENT") {
+  // Hanya PM
+  if (user.role !== "PM") {
     throw new Error("Forbidden");
   }
 
-  // INTERNAL hanya boleh mengubah task miliknya
-  if (user.role === "INTERNAL") {
-    if (task.assigneeId !== user.userId) {
-      throw new Error("Forbidden");
-    }
+  if (!newDescription?.trim()) {
+    throw new Error(
+      "Task description is required",
+    );
   }
 
-  if (!newDescription.trim()) {
-    throw new Error("Task description is required");
+  if (
+    typeof currentVersion !== "number" ||
+    !Number.isInteger(currentVersion) ||
+    currentVersion < 1
+  ) {
+    throw new Error(
+      "Invalid task version",
+    );
+  }
+
+  const task =
+    await findTaskById(taskId);
+
+  if (!task) {
+    throw new Error(
+      "Task not found",
+    );
   }
 
   const result =
     await updateTaskDescriptionWithLock(
       taskId,
-      newDescription,
+      newDescription.trim(),
       currentVersion,
       user.userId,
     );
@@ -254,25 +385,47 @@ export async function updateTaskDescription(
 
   return result.task;
 }
-// =====================================================
-// UPDATE TASK ASSIGNEE
-// =====================================================
 
+
+/**
+ * =====================================================
+ * UPDATE ASSIGNEE
+ * =====================================================
+ */
 export async function updateTaskAssignee(
   taskId: string,
   newAssigneeId: string | null,
   currentVersion: number,
   user: AuthUser,
 ) {
-  const task = await findTaskById(taskId);
-
-  if (!task) {
-    throw new Error("Task not found");
+  if (!taskId) {
+    throw new Error(
+      "Task ID is required",
+    );
   }
 
-  // Hanya PM yang boleh mengubah assignee
+  // Hanya PM
   if (user.role !== "PM") {
     throw new Error("Forbidden");
+  }
+
+  if (
+    typeof currentVersion !== "number" ||
+    !Number.isInteger(currentVersion) ||
+    currentVersion < 1
+  ) {
+    throw new Error(
+      "Invalid task version",
+    );
+  }
+
+  const task =
+    await findTaskById(taskId);
+
+  if (!task) {
+    throw new Error(
+      "Task not found",
+    );
   }
 
   const result =
@@ -292,49 +445,75 @@ export async function updateTaskAssignee(
   return result.task;
 }
 
-// =====================================================
-// ADD TASK DEPENDENCY
-// =====================================================
-
+/**
+ * =====================================================
+ * ADD TASK DEPENDENCY
+ * =====================================================
+ */
 export async function addTaskDependency(
   taskId: string,
   dependsOnTaskId: string,
   user: AuthUser,
 ) {
-  // Hanya PM yang boleh membuat dependency
+  // Hanya PM
   if (user.role !== "PM") {
     throw new Error("Forbidden");
   }
 
-  // Task tidak boleh bergantung pada dirinya sendiri
-  if (taskId === dependsOnTaskId) {
+  if (
+    !taskId ||
+    !dependsOnTaskId
+  ) {
+    throw new Error(
+      "Task ID and dependency task ID are required",
+    );
+  }
+
+  // Tidak boleh bergantung pada dirinya sendiri
+  if (
+    taskId === dependsOnTaskId
+  ) {
     throw new Error(
       "A task cannot depend on itself",
     );
   }
 
-  const task = await findTaskById(taskId);
+  const task =
+    await findTaskById(taskId);
 
-  const dependency = await findTaskById(
-    dependsOnTaskId,
-  );
+  const dependency =
+    await findTaskById(
+      dependsOnTaskId,
+    );
 
   if (!task || !dependency) {
-    throw new Error("Task not found");
+    throw new Error(
+      "Task not found",
+    );
   }
 
-  // Dependency harus berada di project yang sama
-  if (task.projectId !== dependency.projectId) {
+  // Harus satu project
+  if (
+    task.projectId !==
+    dependency.projectId
+  ) {
     throw new Error(
       "Tasks must belong to the same project",
     );
   }
 
-  // Cegah circular dependency
-  const createsCycle = await hasDependencyPath(
-    dependsOnTaskId,
-    taskId,
-  );
+  /**
+   * Cegah circular dependency.
+   *
+   * Apabila dependency -> task sudah memiliki
+   * jalur ke task utama, maka penambahan ini
+   * akan membuat cycle.
+   */
+  const createsCycle =
+    await hasDependencyPath(
+      dependsOnTaskId,
+      taskId,
+    );
 
   if (createsCycle) {
     throw new Error(
@@ -346,4 +525,26 @@ export async function addTaskDependency(
     taskId,
     dependsOnTaskId,
   );
+}
+export async function deleteTask(
+  taskId: string,
+  user: {
+    id: string;
+    role: Role;
+  },
+) {
+  if (user.role !== "PM") {
+    throw new Error("Forbidden");
+  }
+
+  const task = await softDeleteTask(
+    taskId,
+    user.id,
+  );
+
+  if (!task) {
+    throw new Error("Task not found");
+  }
+
+  return task;
 }

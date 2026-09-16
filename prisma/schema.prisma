@@ -50,6 +50,7 @@ model User {
   clientProjects Project[] @relation("ClientProjects")
   assignedTasks  Task[]    @relation("AssignedTasks")
   auditLogs     AuditLog[] @relation("UserAuditLogs")
+  uploadedAttachments TaskAttachment[]
 }
 
 // ========================================
@@ -97,6 +98,7 @@ model Task {
   dependencies  TaskDependency[]   @relation("TaskDependencies")
   prerequisites TaskDependency[]   @relation("TaskPrerequisites")
   auditLogs     AuditLog[]         @relation("TaskAuditLogs")
+  attachments TaskAttachment[]
 
   @@index([projectId])
   @@index([assigneeId])
@@ -140,4 +142,21 @@ model AuditLog {
   @@index([taskId])
   @@index([userId])
   @@index([timestamp])
+}
+model TaskAttachment {
+  id             String   @id @default(cuid())
+  taskId         String
+  uploadedById   String
+  filename       String
+  storedFilename String
+  mimeType       String
+  size           Int
+  createdAt      DateTime @default(now())
+  deletedAt      DateTime?
+
+  task       Task @relation(fields: [taskId], references: [id])
+  uploadedBy User @relation(fields: [uploadedById], references: [id])
+
+  @@index([taskId])
+  @@index([uploadedById])
 }

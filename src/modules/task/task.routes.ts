@@ -8,6 +8,7 @@ import {
   updateTaskDescriptionController,
   updateTaskAssigneeController,
   addTaskDependencyController,
+  deleteTaskController
 } from "./task.controller";
 
 const taskRoutes = new Hono();
@@ -21,5 +22,6 @@ taskRoutes.patch("/:id/assignee",updateTaskAssigneeController,);
 taskRoutes.get("/project/:projectId",getProjectTasksController,);
 taskRoutes.post("/:id/dependencies", addTaskDependencyController);
 taskRoutes.post("/", createTaskController);
+taskRoutes.delete("/:id", deleteTaskController);
 
 export default taskRoutes;
