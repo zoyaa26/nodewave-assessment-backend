@@ -47,9 +47,9 @@ model User {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  clientProjects Project[] @relation("ClientProjects")
-  assignedTasks  Task[]    @relation("AssignedTasks")
-  auditLogs     AuditLog[] @relation("UserAuditLogs")
+  clientProjects      Project[]       @relation("ClientProjects")
+  assignedTasks       Task[]          @relation("AssignedTasks")
+  auditLogs           AuditLog[]      @relation("UserAuditLogs")
   uploadedAttachments TaskAttachment[]
 }
 
@@ -98,12 +98,13 @@ model Task {
   dependencies  TaskDependency[]   @relation("TaskDependencies")
   prerequisites TaskDependency[]   @relation("TaskPrerequisites")
   auditLogs     AuditLog[]         @relation("TaskAuditLogs")
-  attachments TaskAttachment[]
+  attachments   TaskAttachment[]
 
   @@index([projectId])
   @@index([assigneeId])
   @@index([status])
 }
+
 // ========================================
 // TASK DEPENDENCY
 // ========================================
@@ -115,26 +116,26 @@ model TaskDependency {
 
   createdAt DateTime @default(now())
 
-  task        Task @relation("TaskDependencies", fields: [taskId], references: [id])
+  task         Task @relation("TaskDependencies", fields: [taskId], references: [id])
   dependsOnTask Task @relation("TaskPrerequisites", fields: [dependsOnTaskId], references: [id])
 
   @@unique([taskId, dependsOnTaskId])
   @@index([taskId])
   @@index([dependsOnTaskId])
 }
+
 // ========================================
 // AUDIT LOG
 // ========================================
 
 model AuditLog {
-  id        String   @id @default(cuid())
-  taskId    String
-  userId    String
-  timestamp DateTime @default(now())
-
+  id            String   @id @default(cuid())
+  taskId        String
+  userId        String
+  timestamp     DateTime @default(now())
   changedColumn String
-  oldValue     String?
-  newValue     String?
+  oldValue      String?
+  newValue      String?
 
   task Task @relation("TaskAuditLogs", fields: [taskId], references: [id])
   user User @relation("UserAuditLogs", fields: [userId], references: [id])
@@ -143,6 +144,11 @@ model AuditLog {
   @@index([userId])
   @@index([timestamp])
 }
+
+// ========================================
+// TASK ATTACHMENT
+// ========================================
+
 model TaskAttachment {
   id             String   @id @default(cuid())
   taskId         String

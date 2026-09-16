@@ -83,6 +83,99 @@ async function main() {
   console.log("✅ Users created");
 
   // =========================
+  // CLEAN PREVIOUS ASSESSMENT DATA
+  // =========================
+
+  const existingProjects = await prisma.project.findMany({
+    where: {
+      name: "NodeWave E-Commerce Platform",
+    },
+    select: {
+      id: true,
+    },
+  });
+
+  const existingProjectIds = existingProjects.map(
+    (existingProject) => existingProject.id,
+  );
+
+  if (existingProjectIds.length > 0) {
+    const existingTasks = await prisma.task.findMany({
+      where: {
+        projectId: {
+          in: existingProjectIds,
+        },
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    const existingTaskIds = existingTasks.map(
+      (existingTask) => existingTask.id,
+    );
+
+    if (existingTaskIds.length > 0) {
+      // Remove dependencies first because TaskDependency
+      // references Task in two directions.
+      await prisma.taskDependency.deleteMany({
+        where: {
+          OR: [
+            {
+              taskId: {
+                in: existingTaskIds,
+              },
+            },
+            {
+              dependsOnTaskId: {
+                in: existingTaskIds,
+              },
+            },
+          ],
+        },
+      });
+
+      // Remove attachments before removing tasks.
+      await prisma.taskAttachment.deleteMany({
+        where: {
+          taskId: {
+            in: existingTaskIds,
+          },
+        },
+      });
+
+      // Remove audit logs before removing tasks.
+      await prisma.auditLog.deleteMany({
+        where: {
+          taskId: {
+            in: existingTaskIds,
+          },
+        },
+      });
+
+      // Finally remove the tasks.
+      await prisma.task.deleteMany({
+        where: {
+          id: {
+            in: existingTaskIds,
+          },
+        },
+      });
+    }
+
+    // Finally remove the old assessment projects.
+    await prisma.project.deleteMany({
+      where: {
+        id: {
+          in: existingProjectIds,
+        },
+      },
+    });
+
+    console.log("♻️ Previous assessment project cleaned");
+  }
+
+  // =========================
   // PROJECT
   // =========================
 
@@ -168,6 +261,10 @@ async function main() {
   });
 
   console.log("✅ Dependencies created");
+
+  // =========================
+  // SUMMARY
+  // =========================
 
   console.log("");
   console.log("🎉 Seed completed successfully!");

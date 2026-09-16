@@ -60,3 +60,10 @@ export async function loginController(c: Context) {
     );
   }
 }
+
+export async function logoutController(c: Context) {
+  return c.json({
+    success: true,
+    message: "Logout successful",
+  });
+}
