@@ -1,0 +1,143 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ========================================
+// ENUMS
+// ========================================
+
+enum Role {
+  PM
+  INTERNAL
+  CLIENT
+}
+
+enum Department {
+  UI_UX
+  FRONTEND
+  BACKEND
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+  BLOCKED
+}
+
+// ========================================
+// USER
+// ========================================
+
+model User {
+  id           String       @id @default(cuid())
+  name         String
+  email        String       @unique
+  passwordHash String
+  role         Role
+  department   Department?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  clientProjects Project[] @relation("ClientProjects")
+  assignedTasks  Task[]    @relation("AssignedTasks")
+  auditLogs     AuditLog[] @relation("UserAuditLogs")
+}
+
+// ========================================
+// PROJECT
+// ========================================
+
+model Project {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  clientId    String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  client User? @relation("ClientProjects", fields: [clientId], references: [id])
+  tasks  Task[]
+
+  @@index([clientId])
+}
+
+// ========================================
+// TASK
+// ========================================
+
+model Task {
+  id           String     @id @default(cuid())
+  projectId    String
+  assigneeId   String?
+  title        String
+  description  String
+  status       TaskStatus @default(TODO)
+  clientVisible Boolean   @default(false)
+
+  // Optimistic locking
+  version Int @default(1)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  project       Project            @relation(fields: [projectId], references: [id])
+  assignee      User?              @relation("AssignedTasks", fields: [assigneeId], references: [id])
+  dependencies  TaskDependency[]   @relation("TaskDependencies")
+  prerequisites TaskDependency[]   @relation("TaskPrerequisites")
+  auditLogs     AuditLog[]         @relation("TaskAuditLogs")
+
+  @@index([projectId])
+  @@index([assigneeId])
+  @@index([status])
+}
+// ========================================
+// TASK DEPENDENCY
+// ========================================
+
+model TaskDependency {
+  id              String   @id @default(cuid())
+  taskId          String
+  dependsOnTaskId String
+
+  createdAt DateTime @default(now())
+
+  task        Task @relation("TaskDependencies", fields: [taskId], references: [id])
+  dependsOnTask Task @relation("TaskPrerequisites", fields: [dependsOnTaskId], references: [id])
+
+  @@unique([taskId, dependsOnTaskId])
+  @@index([taskId])
+  @@index([dependsOnTaskId])
+}
+// ========================================
+// AUDIT LOG
+// ========================================
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  taskId    String
+  userId    String
+  timestamp DateTime @default(now())
+
+  changedColumn String
+  oldValue     String?
+  newValue     String?
+
+  task Task @relation("TaskAuditLogs", fields: [taskId], references: [id])
+  user User @relation("UserAuditLogs", fields: [userId], references: [id])
+
+  @@index([taskId])
+  @@index([userId])
+  @@index([timestamp])
+}
